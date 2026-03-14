@@ -30,7 +30,7 @@ public class UserService {
         }
         /* 2. 创建新用户并保存到“数据库” */
         User newUser = new User(email, password);
-        MOCK_DB.put(email, newUser);
+        newUser.saveToDb(MOCK_DB);
 
         return new Result<>(constant.successCode, constant.msgRegisterSuccess, null);
     }
@@ -45,7 +45,7 @@ public class UserService {
         }
         
             /*3.检验密码是否正确 */
-        if (!user.getPassword().equals(password)) {
+        if (!user.verifyPassword(password)) {
             return new Result<>(constant.badRequestCode, constant.msgPasswordError, null);
         }
         
