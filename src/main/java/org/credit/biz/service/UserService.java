@@ -26,14 +26,13 @@ public class UserService {
     public Result<Void> register(String email, String password) {
         /* 1. 检查邮箱是否已经注册 */
         if (MOCK_DB.containsKey(email)) {
-            /** TODO1: 将 400 200 这种常量 抽取成 constant 变量 */
-            return new Result<>(400, constant.msgEmailRegisted, null);
+            return new Result<>(constant.badRequestCode, constant.msgEmailRegisted, null);
         }
         /* 2. 创建新用户并保存到“数据库” */
         User newUser = new User(email, password);
         MOCK_DB.put(email, newUser);
 
-        return new Result<>(200, constant.msgRegisterSuccess, null);
+        return new Result<>(constant.successCode, constant.msgRegisterSuccess, null);
     }
     
     public Result<User> login(String email, String password) {
@@ -42,14 +41,14 @@ public class UserService {
         
         /*2.检验邮箱是否注册 */
         if (user == null) {
-            return new Result<>(400, constant.msgEmailNotRegistered, null);
+            return new Result<>(constant.badRequestCode, constant.msgEmailNotRegistered, null);
         }
         
             /*3.检验密码是否正确 */
         if (!user.getPassword().equals(password)) {
-            return new Result<>(400, constant.msgPasswordError, null);
+            return new Result<>(constant.badRequestCode, constant.msgPasswordError, null);
         }
         
-        return new Result<>(200, constant.msgLoginSuccess, user);
+        return new Result<>(constant.successCode, constant.msgLoginSuccess, user);
     }
 }

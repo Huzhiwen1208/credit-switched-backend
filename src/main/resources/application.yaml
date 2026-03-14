@@ -32,6 +32,8 @@ auth:
     msgRegisterSuccess: "注册成功"
     msgEmailNotRegistered: "该邮箱未注册"
     msgPasswordError: "密码错误"
+    badRequestCode: 400
+    successCode: 200
 
 captch:
   captchaStr: "captcha"

@@ -24,4 +24,6 @@ public class AuthHandlerConstant {
     public String msgRegisterSuccess;
     public String msgEmailNotRegistered;
     public String msgPasswordError;
+    public int badRequestCode;
+    public int successCode;
 }
