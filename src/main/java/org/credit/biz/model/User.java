@@ -1,7 +1,7 @@
 package org.credit.biz.model;
 import java.util.Map;
 
-/** TODO2：充血模型改造 */
+
 public class User {
 
     private String email;

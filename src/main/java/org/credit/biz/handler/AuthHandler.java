@@ -67,10 +67,10 @@ public class AuthHandler {
         String sessionEmail = (String) session.getAttribute(authHandlerConstant.registerEmailKey);
 
         if (sessionCode == null || !sessionCode.equals(code)) {
-            return new Result<>(400, authHandlerConstant.msgEmailCaptchaError, null);
+            return new Result<>(authHandlerConstant.badRequestCode, authHandlerConstant.msgEmailCaptchaError, null);
         }
         if (!email.equals(sessionEmail)) {
-            return new Result<>(400, authHandlerConstant.msgRegisterEmailError, null);
+            return new Result<>(authHandlerConstant.badRequestCode, authHandlerConstant.msgRegisterEmailError, null);
         }
         
         /* 2. 调用 UserService 完成注册 */
@@ -101,7 +101,7 @@ public class AuthHandler {
         Result<User> loginResult = userService.login(email, password);
 
         /* 3. 登录成功，存入 Session */
-        if (loginResult.getCode() == 200) {
+        if (loginResult.getCode() == authHandlerConstant.successCode) {
             session.setAttribute(authHandlerConstant.loginUserKey, loginResult.getData());
         }
         return loginResult;
