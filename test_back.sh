@@ -1,0 +1,2 @@
+cd backend
+./mvnw test
