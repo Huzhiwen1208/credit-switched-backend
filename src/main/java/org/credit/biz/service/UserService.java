@@ -1,54 +1,97 @@
 package org.credit.biz.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper; // 引入 MP 的条件构造器
 import org.credit.biz.common.Result;
 import org.credit.biz.constant.AuthHandlerConstant;
+import org.credit.biz.mapper.UserMapper; // 1. 引入 Mapper
 import org.credit.biz.model.User;
 import org.springframework.stereotype.Service;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
-@RequiredArgsConstructor
+@Slf4j
+@RequiredArgsConstructor  // Lombok 会自动生成 final 字段的构造函数
 public class UserService {
 
-    /* ============================================================
-    【模拟数据库】
-    这里的 static Map 就像是一个在内存里的“记事本”。
-    程序启动时，它存在；程序关闭，数据就丢了。
-    ============================================================*/
-    private static final Map<String, User> MOCK_DB = new ConcurrentHashMap<>();
+    // 1. 删除模拟数据库，注入 UserMapper (Spring Boot 会自动把 Mapper 的代理对象注入进来)
+    private final UserMapper userMapper;
+    
     private final AuthHandlerConstant constant;
 
+    private Result<User> loginDatabaseError(String email, Exception e) {
+        log.error("Login database access failed. email={}", email, e);
+        return new Result<>(500, "登录失败，数据库连接或配置异常", null);
+    }
+
+    private Result<Void> registerDatabaseError(String email, Exception e) {
+        log.error("Register database access failed. email={}", email, e);
+        return new Result<>(500, "注册失败，数据库连接或配置异常", null);
+    }
     
     public Result<Void> register(String email, String password) {
+        log.info("Register start. email={}", email);
         /* 1. 检查邮箱是否已经注册 */
-        if (MOCK_DB.containsKey(email)) {
+        // 使用 MP 的 selectOne 配合 LambdaQueryWrapper
+        User existingUser;
+        try {
+            existingUser = userMapper.selectOne(
+                new LambdaQueryWrapper<User>().eq(User::getEmail, email)
+            );
+        } catch (Exception e) {
+            return registerDatabaseError(email, e);
+        }
+
+        if (existingUser != null) {
+            log.warn("Register skipped because email already exists. email={}", email);
             return new Result<>(constant.badRequestCode, constant.msgEmailRegisted, null);
         }
+
         /* 2. 创建新用户并保存到“数据库” */
-        User newUser = new User(email, password);
-        newUser.saveToDb(MOCK_DB);
+        User newUser = new User();
+        newUser.setUsername(email);
+        newUser.setEmail(email);
+        newUser.setPassword(password);
+        // 使用 MP 的 insert 方法插入数据库
+        int rows;
+        try {
+            rows = userMapper.insert(newUser);
+        } catch (Exception e) {
+            return registerDatabaseError(email, e);
+        }
+        log.info("Register insert finished. email={}, rows={}, userId={}", email, rows, newUser.getId());
+
+        if (rows != 1) {
+            log.error("Register insert failed. email={}, rows={}", email, rows);
+            return new Result<>(constant.badRequestCode, "注册失败，用户数据未写入数据库", null);
+        }
 
         return new Result<>(constant.successCode, constant.msgRegisterSuccess, null);
     }
     
     public Result<User> login(String email, String password) {
-        /*1.获取模拟数据库里与登录邮箱对应的User对象 */
-        User user = MOCK_DB.get(email);
+        /* 1. 从数据库获取用户 */
+        User user;
+        try {
+            user = userMapper.selectOne(
+                new LambdaQueryWrapper<User>().eq(User::getEmail, email)
+            );
+        } catch (Exception e) {
+            return loginDatabaseError(email, e);
+        }
         
-        /*2.检验邮箱是否注册 */
+        /* 2. 检验邮箱是否注册 */
         if (user == null) {
             return new Result<>(constant.badRequestCode, constant.msgEmailNotRegistered, null);
         }
         
-            /*3.检验密码是否正确 */
+        /*3.检验密码是否正确 */
         if (!user.verifyPassword(password)) {
             return new Result<>(constant.badRequestCode, constant.msgPasswordError, null);
         }
-        
+
         return new Result<>(constant.successCode, constant.msgLoginSuccess, user);
     }
 }

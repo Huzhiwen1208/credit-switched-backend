@@ -3,6 +3,7 @@ package org.credit.biz;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 import org.credit.biz.common.Result;
 import org.credit.biz.handler.AuthHandler;
@@ -17,10 +18,18 @@ import org.credit.biz.model.User;
 class CreditSwitchApplicationTests {
     @Autowired
 	private AuthHandler authHandler;
-	MockHttpSession session = new MockHttpSession();
+
+	private MockHttpSession newSession() {
+		return new MockHttpSession();
+	}
+
+	private String uniqueEmail() {
+		return "test-" + UUID.randomUUID() + "@qq.com";
+	}
 
 	@Test
 	void sendEmailCode_should_return_sucesss_happy_case() {
+		MockHttpSession session = newSession();
 		/* 模拟发送邮件验证码请求参数 */
 		Map<String, String> params = new HashMap<>();
 		params.put("email", "15039017198@163.com");
@@ -35,6 +44,7 @@ class CreditSwitchApplicationTests {
 
 	@Test
 	void emailCodeHandler_sendEmailCode_should_return_sendEmail_fail_when_captcha_is_wrong() {
+		MockHttpSession session = newSession();
 		/* 模拟发送邮件验证码请求参数 */
 		Map<String, String> params = new HashMap<>();
 		params.put("email", "15039017198@163.com");
@@ -48,15 +58,17 @@ class CreditSwitchApplicationTests {
 
 	@Test
 	void testAuthHander_register_should_return_register_success_when_sucsess_register() {
+		MockHttpSession session = newSession();
+		String email = uniqueEmail();
 		/* 模拟注册请求请求参数 */
         Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
+        params.put("email", email);
 	    params.put("code", "66666");
 	    params.put("password", "123456");
 
         /* 模拟 Session 中存储的验证码和注册邮箱 */
 		session.setAttribute("EMAIL_CODE_KEY", "66666");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
+		session.setAttribute("REGISTER_EMAIL", email);
 
 		Result<Void> r =authHandler.register(params, session);
 		assertEquals("注册成功", r.getMsg(), "注册功能有问题");
@@ -64,15 +76,17 @@ class CreditSwitchApplicationTests {
     
 	@Test
 	void testAuthHander_register_should_return_register_fail_when_captcha_is_wrong() {
+		MockHttpSession session = newSession();
+		String email = uniqueEmail();
 		/* 模拟注册请求请求参数 */
         Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
+        params.put("email", email);
 	    params.put("code", "66666");
 	    params.put("password", "123456");
 
         /* 模拟 Session 中存储的验证码和注册邮箱 */
 		session.setAttribute("EMAIL_CODE_KEY", "66667");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
+		session.setAttribute("REGISTER_EMAIL", email);
 
 		Result<Void> r =authHandler.register(params, session);
 		assertEquals("邮箱验证码错误或过期", r.getMsg(), "邮箱验证码检验功能有问题");
@@ -80,19 +94,21 @@ class CreditSwitchApplicationTests {
 
 	@Test
 	void testAuthHander_register_should_return_register_fail_when_registeremail_is_registed() {
+		MockHttpSession session = newSession();
+		String email = uniqueEmail();
 		/* 模拟注册请求请求参数 */
         Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
+        params.put("email", email);
 	    params.put("code", "66666");
 	    params.put("password", "123456");
 
         /* 模拟 Session 中存储的验证码和注册邮箱 */
 		session.setAttribute("EMAIL_CODE_KEY", "66666");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
+		session.setAttribute("REGISTER_EMAIL", email);
         authHandler.register(params, session);
         
 		/*上一次注册操作会把session里用到的值清空 */
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
+		session.setAttribute("REGISTER_EMAIL", email);
 		session.setAttribute("EMAIL_CODE_KEY", "66666");
 
 		Result<Void> r =authHandler.register(params, session);
@@ -101,9 +117,11 @@ class CreditSwitchApplicationTests {
 
 	@Test
 	void testAuthHander_login_should_return_login_success_when_login_is_correct() {
+		MockHttpSession session = newSession();
+		String email = uniqueEmail();
 		/* 模拟登录请求请求参数 */
         Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
+        params.put("email", email);
 	    params.put("captcha", "666666");
 	    params.put("password", "123456");
 
@@ -111,11 +129,11 @@ class CreditSwitchApplicationTests {
         
 		/*模拟这个邮箱已经注册 */
 		Map<String, String> params1 = new HashMap<>();
-        params1.put("email", "test@qq.com");
+        params1.put("email", email);
 	    params1.put("code", "66666");
 	    params1.put("password", "123456");
 		session.setAttribute("EMAIL_CODE_KEY", "66666");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
+		session.setAttribute("REGISTER_EMAIL", email);
 		authHandler.register(params1, session);
 
 
@@ -125,6 +143,7 @@ class CreditSwitchApplicationTests {
 
 	@Test
 	void testAuthHander_login_should_return_errorCaptcha_when_captcha_is_wrong() {
+		MockHttpSession session = newSession();
 		/* 模拟登录请求请求参数 */
         Map<String, String> params = new HashMap<>();
         params.put("email", "test@qq.com");
@@ -140,9 +159,11 @@ class CreditSwitchApplicationTests {
 
 	@Test
 	void testAuthHander_login_should_return_login_fail_when_logineamil_is_not_register() {
+		MockHttpSession session = newSession();
+		String email = uniqueEmail();
 		/* 模拟登录请求请求参数 */
         Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
+        params.put("email", email);
 	    params.put("captcha", "666666");
 	    params.put("password", "123456");
 
@@ -155,9 +176,11 @@ class CreditSwitchApplicationTests {
 
 	@Test
 	void testAuthHander_login_should_return_login_fail_when_password_is_wrong() {
+		MockHttpSession session = newSession();
+		String email = uniqueEmail();
 		/* 模拟登录请求请求参数 */
         Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
+        params.put("email", email);
 	    params.put("captcha", "666666");
 	    params.put("password", "123457");
 
@@ -165,11 +188,11 @@ class CreditSwitchApplicationTests {
         
 		/*模拟这个邮箱已经注册 */
 		Map<String, String> params1 = new HashMap<>();
-        params1.put("email", "test@qq.com");
+        params1.put("email", email);
 	    params1.put("code", "66666");
 	    params1.put("password", "123456");
 		session.setAttribute("EMAIL_CODE_KEY", "66666");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
+		session.setAttribute("REGISTER_EMAIL", email);
 		authHandler.register(params1, session);
 
 		Result<User> r =authHandler.login(params, session);
