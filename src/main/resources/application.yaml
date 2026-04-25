@@ -22,10 +22,10 @@ spring:
     password: cwhjksudhpjjecgg
     title: "界面注册验证码"
     template: "您的注册验证码为：%s，五分钟内有效"
-        properties:
-          mail:
-            smtp:
-              auth: true
+    properties:
+      mail:
+        smtp:
+          auth: true
           starttls:
             enable: true
 
@@ -41,20 +41,17 @@ spring:
           min-idle: 0
           max-wait: 2000ms
 
-  # ==========================================
-  # 2. 新增：MyBatis-Plus 配置
-  # ==========================================
-  mybatis-plus:
-    configuration:
-      # 开启控制台打印 SQL，方便调试
-      log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
-      # 自动将数据库下划线字段 (user_name) 映射为 Java 驼峰字段 (userName)
-      map-underscore-to-camel-case: true
-    
-    global-config:
-      db-config:
-        # 全局主键策略：使用雪花算法生成唯一 ID
-        id-type: assign_id
+mybatis-plus:
+  configuration:
+    # 开启控制台打印 SQL，方便调试
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # 自动将数据库下划线字段 (user_name) 映射为 Java 驼峰字段 (userName)
+    map-underscore-to-camel-case: true
+  
+  global-config:
+    db-config:
+      # 全局主键策略：使用雪花算法生成唯一 ID
+      id-type: assign_id
 
 auth:
   handler:
