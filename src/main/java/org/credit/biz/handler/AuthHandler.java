@@ -4,6 +4,7 @@ import org.credit.biz.constant.AuthHandlerConstant;
 import org.credit.biz.constant.CaptchImageGeneratorConstant;
 import org.credit.biz.model.CaptchaResult;
 import org.credit.biz.model.User;
+import org.credit.biz.model.UserProfile;
 import org.credit.biz.service.EmailService;
 import org.credit.biz.service.UserService;
 import org.credit.biz.utils.CaptchaUtils;
@@ -12,6 +13,7 @@ import java.io.IOException;
 import java.util.Map;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +25,7 @@ import jakarta.servlet.http.HttpSession;
 @CrossOrigin
 @RestController
 @RequestMapping("/apply")
+@Slf4j
 @RequiredArgsConstructor
 public class AuthHandler {
     @Autowired
@@ -66,20 +69,46 @@ public class AuthHandler {
         String sessionCode = (String) session.getAttribute(authHandlerConstant.emailCodeKey);
         String sessionEmail = (String) session.getAttribute(authHandlerConstant.registerEmailKey);
 
+        log.info(
+            "Register request received. sessionId={}, email={}, hasPassword={}, codeProvided={}, sessionCodeExists={}, sessionEmail={}",
+            session.getId(),
+            email,
+            password != null && !password.isBlank(),
+            code != null && !code.isBlank(),
+            sessionCode != null,
+            sessionEmail
+        );
+
         if (sessionCode == null || !sessionCode.equals(code)) {
+            log.warn(
+                "Register blocked by email code validation. sessionId={}, email={}, providedCode={}, sessionCode={}",
+                session.getId(),
+                email,
+                code,
+                sessionCode
+            );
             return new Result<>(authHandlerConstant.badRequestCode, authHandlerConstant.msgEmailCaptchaError, null);
         }
         if (!email.equals(sessionEmail)) {
+            log.warn(
+                "Register blocked by session email mismatch. sessionId={}, requestEmail={}, sessionEmail={}",
+                session.getId(),
+                email,
+                sessionEmail
+            );
             return new Result<>(authHandlerConstant.badRequestCode, authHandlerConstant.msgRegisterEmailError, null);
         }
         
         /* 2. 调用 UserService 完成注册 */
         Result<Void> result =  userService.register(email, password);
+        log.info("Register service completed. sessionId={}, email={}, resultCode={}, resultMsg={}", session.getId(), email, result.getCode(), result.getMsg());
         
 
         /* 3. 注册成功后清理 Session */
-        session.removeAttribute(authHandlerConstant.emailCodeKey);
-        session.removeAttribute(authHandlerConstant.registerEmailKey);
+        if (result.getCode() == authHandlerConstant.successCode) {
+            session.removeAttribute(authHandlerConstant.emailCodeKey);
+            session.removeAttribute(authHandlerConstant.registerEmailKey);
+        }
 
         return result;
     }
@@ -105,5 +134,17 @@ public class AuthHandler {
             session.setAttribute(authHandlerConstant.loginUserKey, loginResult.getData());
         }
         return loginResult;
+    }
+
+    @GetMapping("/users/profile")
+    public Result<UserProfile> getUserProfile(@RequestParam String email) {
+        return userService.getUserProfile(email);
+    }
+
+    @PostMapping("/users/profile/username")
+    public Result<Void> updateUsername(@RequestBody Map<String, String> params) {
+        String email = params.get(authHandlerConstant.email);
+        String username = params.get("username");
+        return userService.updateUsername(email, username);
     }
 }
