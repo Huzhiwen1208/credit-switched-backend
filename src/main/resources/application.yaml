@@ -29,6 +29,18 @@ spring:
           starttls:
             enable: true
 
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: 2000ms
+
   # ==========================================
   # 2. 新增：MyBatis-Plus 配置
   # ==========================================
