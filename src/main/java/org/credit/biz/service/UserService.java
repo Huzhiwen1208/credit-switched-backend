@@ -57,6 +57,11 @@ public class UserService {
         return new Result<>(500, "更新用户信息失败，数据库连接或配置异常", null);
     }
 
+    private Result<Void> deleteUserDatabaseError(String email, Exception e) {
+        log.error("Delete user database access failed. email={}", email, e);
+        return new Result<>(500, "删除用户信息失败，数据库连接或配置异常", null);
+    }
+
     private void cacheUserProfile(UserProfile profile) {
         String cacheKey = buildUserProfileCacheKey(profile.getEmail());
         try {
@@ -189,6 +194,50 @@ public class UserService {
         return new Result<>(constant.successCode, "查询用户信息成功（已写入缓存）", profile);
     }
 
+    public Result<UserProfile> createUserProfile(String email, String password, String username) {
+        if (email == null || email.isBlank()) {
+            return new Result<>(constant.badRequestCode, "邮箱不能为空", null);
+        }
+        if (password == null || password.isBlank()) {
+            return new Result<>(constant.badRequestCode, "密码不能为空", null);
+        }
+
+        String finalUsername = (username == null || username.isBlank()) ? email : username;
+
+        User existingUser;
+        try {
+            existingUser = userMapper.selectOne(
+                new LambdaQueryWrapper<User>().eq(User::getEmail, email)
+            );
+        } catch (Exception e) {
+            return new Result<>(500, "新增用户信息失败，数据库连接或配置异常", null);
+        }
+
+        if (existingUser != null) {
+            return new Result<>(constant.badRequestCode, constant.msgEmailRegisted, null);
+        }
+
+        User newUser = new User();
+        newUser.setEmail(email);
+        newUser.setPassword(password);
+        newUser.setUsername(finalUsername);
+
+        int rows;
+        try {
+            rows = userMapper.insert(newUser);
+        } catch (Exception e) {
+            return new Result<>(500, "新增用户信息失败，数据库连接或配置异常", null);
+        }
+
+        if (rows != 1) {
+            return new Result<>(constant.badRequestCode, "新增用户失败，用户数据未写入数据库", null);
+        }
+
+        UserProfile profile = UserProfile.fromUser(newUser);
+        cacheUserProfile(profile);
+        return new Result<>(constant.successCode, "新增用户成功，已写入数据库和缓存", profile);
+    }
+
     public Result<Void> updateUsername(String email, String username) {
         if (email == null || email.isBlank()) {
             return new Result<>(constant.badRequestCode, "邮箱不能为空", null);
@@ -215,5 +264,27 @@ public class UserService {
 
         evictUserProfileCache(email);
         return new Result<>(constant.successCode, "用户名更新成功，缓存已删除", null);
+    }
+
+    public Result<Void> deleteUserProfile(String email) {
+        if (email == null || email.isBlank()) {
+            return new Result<>(constant.badRequestCode, "邮箱不能为空", null);
+        }
+
+        int rows;
+        try {
+            rows = userMapper.delete(
+                new LambdaQueryWrapper<User>().eq(User::getEmail, email)
+            );
+        } catch (Exception e) {
+            return deleteUserDatabaseError(email, e);
+        }
+
+        if (rows != 1) {
+            return new Result<>(constant.badRequestCode, constant.msgEmailNotRegistered, null);
+        }
+
+        evictUserProfileCache(email);
+        return new Result<>(constant.successCode, "用户删除成功，缓存已删除", null);
     }
 }

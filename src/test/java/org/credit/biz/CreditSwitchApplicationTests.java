@@ -311,6 +311,69 @@ class CreditSwitchApplicationTests {
     }
 
     @Test
+    void testQueryUserProfile_PostShouldReadFromRedisAndMysql() throws Exception {
+        String email = uniqueEmail();
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null);
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class)))
+            .thenReturn(buildUser(6L, email, "123456", "post-query-user"));
+
+        mockMvc.perform(post("/apply/users/profile/query")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s"
+                    }
+                    """.formatted(email)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("查询用户信息成功（已写入缓存）"))
+            .andExpect(jsonPath("$.data.email").value(email))
+            .andExpect(jsonPath("$.data.username").value("post-query-user"));
+
+        verify(userMapper, times(1)).selectOne(any(LambdaQueryWrapper.class));
+        verify(valueOperations, times(1)).set(
+            eq(USER_PROFILE_CACHE_PREFIX + email),
+            argThat(json -> json != null && json.contains("\"username\":\"post-query-user\"")),
+            eq(Duration.ofMinutes(10))
+        );
+    }
+
+    @Test
+    void testCreateUserProfile_PostShouldInsertIntoMysqlAndWriteRedis() throws Exception {
+        String email = uniqueEmail();
+
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+        when(userMapper.insert(any(User.class))).thenAnswer(invocation -> {
+            User user = invocation.getArgument(0);
+            user.setId(7L);
+            return 1;
+        });
+
+        mockMvc.perform(post("/apply/users/profile/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s",
+                      "password": "123456",
+                      "username": "created-user"
+                    }
+                    """.formatted(email)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("新增用户成功，已写入数据库和缓存"))
+            .andExpect(jsonPath("$.data.id").value(7))
+            .andExpect(jsonPath("$.data.email").value(email))
+            .andExpect(jsonPath("$.data.username").value("created-user"));
+
+        verify(userMapper, times(1)).insert(any(User.class));
+        verify(valueOperations, times(1)).set(
+            eq(USER_PROFILE_CACHE_PREFIX + email),
+            argThat(json -> json != null && json.contains("\"username\":\"created-user\"")),
+            eq(Duration.ofMinutes(10))
+        );
+    }
+
+    @Test
     void testUpdateUsername_ShouldEvictRedisCacheAfterDatabaseUpdate() throws Exception {
         String email = uniqueEmail();
 
@@ -337,6 +400,28 @@ class CreditSwitchApplicationTests {
             .andExpect(jsonPath("$.msg").value("用户名更新成功，缓存已删除"));
 
         // 更新资料后应删除对应的 Redis 缓存 Key。
+        verify(stringRedisTemplate, times(1)).delete(USER_PROFILE_CACHE_PREFIX + email);
+    }
+
+    @Test
+    void testDeleteUserProfile_PostShouldDeleteMysqlAndEvictRedis() throws Exception {
+        String email = uniqueEmail();
+
+        when(userMapper.delete(any(LambdaQueryWrapper.class))).thenReturn(1);
+        when(stringRedisTemplate.delete(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(Boolean.TRUE);
+
+        mockMvc.perform(post("/apply/users/profile/delete")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s"
+                    }
+                    """.formatted(email)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("用户删除成功，缓存已删除"));
+
+        verify(userMapper, times(1)).delete(any(LambdaQueryWrapper.class));
         verify(stringRedisTemplate, times(1)).delete(USER_PROFILE_CACHE_PREFIX + email);
     }
 

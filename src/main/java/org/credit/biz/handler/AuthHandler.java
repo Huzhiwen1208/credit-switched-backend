@@ -141,10 +141,30 @@ public class AuthHandler {
         return userService.getUserProfile(email);
     }
 
+    @PostMapping("/users/profile/query")
+    public Result<UserProfile> queryUserProfile(@RequestBody Map<String, String> params) {
+        String email = params.get(authHandlerConstant.email);
+        return userService.getUserProfile(email);
+    }
+
+    @PostMapping("/users/profile/create")
+    public Result<UserProfile> createUserProfile(@RequestBody Map<String, String> params) {
+        String email = params.get(authHandlerConstant.email);
+        String password = params.get(authHandlerConstant.password);
+        String username = params.get("username");
+        return userService.createUserProfile(email, password, username);
+    }
+
     @PostMapping("/users/profile/username")
     public Result<Void> updateUsername(@RequestBody Map<String, String> params) {
         String email = params.get(authHandlerConstant.email);
         String username = params.get("username");
         return userService.updateUsername(email, username);
+    }
+
+    @PostMapping("/users/profile/delete")
+    public Result<Void> deleteUserProfile(@RequestBody Map<String, String> params) {
+        String email = params.get(authHandlerConstant.email);
+        return userService.deleteUserProfile(email);
     }
 }
