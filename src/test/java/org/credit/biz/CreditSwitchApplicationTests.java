@@ -1,178 +1,494 @@
 package org.credit.biz;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.time.Duration;
+import java.util.List;
+import java.util.UUID;
 
-import org.credit.biz.common.Result;
-import org.credit.biz.handler.AuthHandler;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.mock.web.MockHttpSession;
-import static org.junit.jupiter.api.Assertions.*;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.credit.biz.model.User;
+import org.credit.biz.model.UserProfile;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.http.MediaType;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mock.web.MockHttpSession;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.credit.biz.mapper.UserMapper;
+import org.credit.biz.service.UserService;
+
+import jakarta.servlet.http.HttpSession;
+import org.mockito.stubbing.Answer;
 
 @SpringBootTest
+@AutoConfigureMockMvc
 class CreditSwitchApplicationTests {
+
+    private static final String CAPTCHA_SESSION_KEY = "captcha";
+    private static final String EMAIL_CODE_SESSION_KEY = "EMAIL_CODE_KEY";
+    private static final String REGISTER_EMAIL_SESSION_KEY = "REGISTER_EMAIL";
+    private static final String LOGIN_USER_SESSION_KEY = "LOGIN_USER";
+    private static final String USER_PROFILE_CACHE_PREFIX = "user:profile:";
+    private static final String NULL_CACHE_VALUE = "__NULL__";
+
     @Autowired
-	private AuthHandler authHandler;
-	MockHttpSession session = new MockHttpSession();
+    private MockMvc mockMvc;
 
-	@Test
-	void sendEmailCode_should_return_sucesss_happy_case() {
-		/* 模拟发送邮件验证码请求参数 */
-		Map<String, String> params = new HashMap<>();
-		params.put("email", "15039017198@163.com");
-		params.put("captcha", "666666");
-        
-		/* 模拟 Session 中存储的验证码与发送来的不一样 */
-		session.setAttribute("captcha", "666666");
+    @Autowired
+    private ObjectMapper objectMapper;
 
-		Result<Void> r =authHandler.sendEmailCode(params, session);
-		assertEquals("邮箱验证码发送成功", r.getMsg(), "发送邮件验证码功能有问题");
-	}
+    @Autowired
+    private UserService userService;
 
-	@Test
-	void emailCodeHandler_sendEmailCode_should_return_sendEmail_fail_when_captcha_is_wrong() {
-		/* 模拟发送邮件验证码请求参数 */
-		Map<String, String> params = new HashMap<>();
-		params.put("email", "15039017198@163.com");
-		params.put("captcha", "666667");
+    @MockBean
+    private JavaMailSender javaMailSender;
 
-		session.setAttribute("captcha", "666666");
+    @MockBean
+    private UserMapper userMapper;
 
-		Result<Void> r =authHandler.sendEmailCode(params, session);
-		assertEquals("图片验证码错误或者过期", r.getMsg(), "发送邮件验证码功能有问题");
-	}
+    @MockBean
+    private StringRedisTemplate stringRedisTemplate;
 
-	@Test
-	void testAuthHander_register_should_return_register_success_when_sucsess_register() {
-		/* 模拟注册请求请求参数 */
-        Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
-	    params.put("code", "66666");
-	    params.put("password", "123456");
+    @MockBean
+    private ValueOperations<String, String> valueOperations;
 
-        /* 模拟 Session 中存储的验证码和注册邮箱 */
-		session.setAttribute("EMAIL_CODE_KEY", "66666");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
+    @BeforeEach
+    void setUp() {
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(userMapper.selectList(any())).thenReturn(List.of());
+        mockRedisBloomCommands();
+        initializeMybatisPlusMetadata();
+        userService.initializeBloomFilter();
+    }
 
-		Result<Void> r =authHandler.register(params, session);
-		assertEquals("注册成功", r.getMsg(), "注册功能有问题");
-	}
-    
-	@Test
-	void testAuthHander_register_should_return_register_fail_when_captcha_is_wrong() {
-		/* 模拟注册请求请求参数 */
-        Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
-	    params.put("code", "66666");
-	    params.put("password", "123456");
+    @Test
+    void testRegisterAndLogin_SuccessfulHappyPath_WithSessionLifecycle() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        String email = uniqueEmail();
+        String password = "123456";
 
-        /* 模拟 Session 中存储的验证码和注册邮箱 */
-		session.setAttribute("EMAIL_CODE_KEY", "66667");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
+        User storedUser = buildUser(1L, email, password, email);
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null, storedUser);
+        when(userMapper.insert(any(User.class))).thenAnswer(invocation -> {
+            User user = invocation.getArgument(0);
+            user.setId(1L);
+            return 1;
+        });
 
-		Result<Void> r =authHandler.register(params, session);
-		assertEquals("邮箱验证码错误或过期", r.getMsg(), "邮箱验证码检验功能有问题");
-	}
+        MvcResult captchaResult = mockMvc.perform(get("/apply/image").session(session))
+            .andExpect(status().isOk())
+            .andReturn();
 
-	@Test
-	void testAuthHander_register_should_return_register_fail_when_registeremail_is_registed() {
-		/* 模拟注册请求请求参数 */
-        Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
-	    params.put("code", "66666");
-	    params.put("password", "123456");
+        HttpSession captchaSession = captchaResult.getRequest().getSession(false);
+        String imageCaptcha = (String) captchaSession.getAttribute(CAPTCHA_SESSION_KEY);
 
-        /* 模拟 Session 中存储的验证码和注册邮箱 */
-		session.setAttribute("EMAIL_CODE_KEY", "66666");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
-        authHandler.register(params, session);
-        
-		/*上一次注册操作会把session里用到的值清空 */
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
-		session.setAttribute("EMAIL_CODE_KEY", "66666");
+        // 验证图片验证码已写入 Session，供后续发送邮箱验证码使用。
+        org.junit.jupiter.api.Assertions.assertNotNull(imageCaptcha);
+        org.junit.jupiter.api.Assertions.assertTrue(captchaResult.getResponse().getContentAsByteArray().length > 0);
 
-		Result<Void> r =authHandler.register(params, session);
-		assertEquals("该邮箱已注册", r.getMsg(), "邮箱已注册检验功能有问题");
-	}
+        mockMvc.perform(post("/apply/send-email-code")
+                .session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s",
+                      "captcha": "%s"
+                    }
+                    """.formatted(email, imageCaptcha)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("邮箱验证码发送成功"));
 
-	@Test
-	void testAuthHander_login_should_return_login_success_when_login_is_correct() {
-		/* 模拟登录请求请求参数 */
-        Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
-	    params.put("captcha", "666666");
-	    params.put("password", "123456");
+        String emailCode = (String) session.getAttribute(EMAIL_CODE_SESSION_KEY);
 
-		session.setAttribute("captcha", "666666");
-        
-		/*模拟这个邮箱已经注册 */
-		Map<String, String> params1 = new HashMap<>();
-        params1.put("email", "test@qq.com");
-	    params1.put("code", "66666");
-	    params1.put("password", "123456");
-		session.setAttribute("EMAIL_CODE_KEY", "66666");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
-		authHandler.register(params1, session);
+        // 发送成功后应写入邮箱验证码和注册邮箱，并移除图片验证码避免复用。
+        org.junit.jupiter.api.Assertions.assertNotNull(emailCode);
+        org.junit.jupiter.api.Assertions.assertEquals(email, session.getAttribute(REGISTER_EMAIL_SESSION_KEY));
+        org.junit.jupiter.api.Assertions.assertNull(session.getAttribute(CAPTCHA_SESSION_KEY));
+        verify(javaMailSender, times(1)).send(any(org.springframework.mail.SimpleMailMessage.class));
 
+        mockMvc.perform(post("/apply/register")
+                .session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s",
+                      "code": "%s",
+                      "password": "%s"
+                    }
+                    """.formatted(email, emailCode, password)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("注册成功"));
 
-		Result<User> r =authHandler.login(params, session);
-		assertEquals("登录成功", r.getMsg(), "登录功能有问题");
-	}
+        // 注册成功后，邮箱验证码相关 Session Key 应被清理。
+        org.junit.jupiter.api.Assertions.assertNull(session.getAttribute(EMAIL_CODE_SESSION_KEY));
+        org.junit.jupiter.api.Assertions.assertNull(session.getAttribute(REGISTER_EMAIL_SESSION_KEY));
 
-	@Test
-	void testAuthHander_login_should_return_errorCaptcha_when_captcha_is_wrong() {
-		/* 模拟登录请求请求参数 */
-        Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
-	    params.put("code", "66666");
-	    params.put("password", "123456");
-        
-		/* 模拟 Session 中存储的验证码 */
-		session.setAttribute("captcha", "666666");
+        mockMvc.perform(get("/apply/image").session(session))
+            .andExpect(status().isOk());
+        String loginCaptcha = (String) session.getAttribute(CAPTCHA_SESSION_KEY);
+        org.junit.jupiter.api.Assertions.assertNotNull(loginCaptcha);
 
-		Result<User> r =authHandler.login(params, session);
-		assertEquals("图片验证码错误或过期", r.getMsg(), "验证码检验功能有问题");
-	}
+        mockMvc.perform(post("/apply/login")
+                .session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s",
+                      "password": "%s",
+                      "captcha": "%s"
+                    }
+                    """.formatted(email, password, loginCaptcha)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("登录成功"))
+            .andExpect(jsonPath("$.data.email").value(email))
+            .andExpect(jsonPath("$.data.username").value(email));
 
-	@Test
-	void testAuthHander_login_should_return_login_fail_when_logineamil_is_not_register() {
-		/* 模拟登录请求请求参数 */
-        Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
-	    params.put("captcha", "666666");
-	    params.put("password", "123456");
+        // 登录成功后应把用户信息放入 Session，图片验证码应被消费删除。
+        org.junit.jupiter.api.Assertions.assertNotNull(session.getAttribute(LOGIN_USER_SESSION_KEY));
+        org.junit.jupiter.api.Assertions.assertNull(session.getAttribute(CAPTCHA_SESSION_KEY));
+    }
 
-		session.setAttribute("captcha", "666666");
+    @Test
+    void testSendEmailCode_ShouldRejectWhenImageCaptchaIsWrong() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(CAPTCHA_SESSION_KEY, "ABCD");
 
+        mockMvc.perform(post("/apply/send-email-code")
+                .session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "wrong-captcha@qq.com",
+                      "captcha": "WXYZ"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.msg").value("图片验证码错误或者过期"));
 
-		Result<User> r =authHandler.login(params, session);
-		assertEquals("该邮箱未注册", r.getMsg(), "未能识别邮箱没有注册的问题");
-	}
+        // 验证被拦截后不应发邮件，也不应写入邮箱验证码相关 Session 状态。
+        verify(javaMailSender, never()).send(any(org.springframework.mail.SimpleMailMessage.class));
+        org.junit.jupiter.api.Assertions.assertNull(session.getAttribute(EMAIL_CODE_SESSION_KEY));
+        org.junit.jupiter.api.Assertions.assertNull(session.getAttribute(REGISTER_EMAIL_SESSION_KEY));
+    }
 
-	@Test
-	void testAuthHander_login_should_return_login_fail_when_password_is_wrong() {
-		/* 模拟登录请求请求参数 */
-        Map<String, String> params = new HashMap<>();
-        params.put("email", "test@qq.com");
-	    params.put("captcha", "666666");
-	    params.put("password", "123457");
+    @Test
+    void testRegister_ShouldRejectWhenRegisterEmailDoesNotMatchSessionEmail() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(EMAIL_CODE_SESSION_KEY, "123456");
+        session.setAttribute(REGISTER_EMAIL_SESSION_KEY, "sent@qq.com");
 
-		session.setAttribute("captcha", "666666");
-        
-		/*模拟这个邮箱已经注册 */
-		Map<String, String> params1 = new HashMap<>();
-        params1.put("email", "test@qq.com");
-	    params1.put("code", "66666");
-	    params1.put("password", "123456");
-		session.setAttribute("EMAIL_CODE_KEY", "66666");
-		session.setAttribute("REGISTER_EMAIL", "test@qq.com");
-		authHandler.register(params1, session);
+        mockMvc.perform(post("/apply/register")
+                .session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "other@qq.com",
+                      "code": "123456",
+                      "password": "123456"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.msg").value("注册邮箱与发送验证码邮箱不一致"));
 
-		Result<User> r =authHandler.login(params, session);
-		assertEquals("密码错误", r.getMsg(), "未能识别密码错误的问题");
-	}
+        // 被邮箱一致性校验拦截后，不应落库。
+        verify(userMapper, never()).insert(any(User.class));
+    }
+
+    @Test
+    void testLogin_ShouldFailWhenPasswordIsWrong() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        String email = uniqueEmail();
+        session.setAttribute(CAPTCHA_SESSION_KEY, "QWER");
+
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class)))
+            .thenReturn(buildUser(2L, email, "correct-password", email));
+
+        mockMvc.perform(post("/apply/login")
+                .session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s",
+                      "password": "wrong-password",
+                      "captcha": "QWER"
+                    }
+                    """.formatted(email)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.msg").value("密码错误"));
+
+        org.junit.jupiter.api.Assertions.assertNull(session.getAttribute(LOGIN_USER_SESSION_KEY));
+    }
+
+    @Test
+    void testLogin_ShouldFailWhenUserDoesNotExist() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        String email = uniqueEmail();
+        session.setAttribute(CAPTCHA_SESSION_KEY, "QWER");
+
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+
+        mockMvc.perform(post("/apply/login")
+                .session(session)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s",
+                      "password": "123456",
+                      "captcha": "QWER"
+                    }
+                    """.formatted(email)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.msg").value("该邮箱未注册"));
+
+        org.junit.jupiter.api.Assertions.assertNull(session.getAttribute(LOGIN_USER_SESSION_KEY));
+    }
+
+    @Test
+    void testGetUserProfile_ShouldQueryDatabaseAndPopulateRedisWhenCacheMisses() throws Exception {
+        String email = uniqueEmail();
+        User storedUser = buildUser(3L, email, "123456", "cache-user");
+
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null, null);
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(storedUser);
+        when(valueOperations.setIfAbsent(eq("lock:user:profile:" + email), eq("1"), any(Duration.class))).thenReturn(Boolean.TRUE);
+
+        mockMvc.perform(get("/apply/users/profile").param("email", email))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("查询用户信息成功（已写入缓存）"))
+            .andExpect(jsonPath("$.data.email").value(email))
+            .andExpect(jsonPath("$.data.username").value("cache-user"));
+
+        // 缓存未命中时应回源数据库，并把查询结果写回 Redis。
+        verify(userMapper, times(1)).selectOne(any(LambdaQueryWrapper.class));
+        verify(valueOperations, times(1)).set(
+            eq(USER_PROFILE_CACHE_PREFIX + email),
+            argThat(json -> json != null && json.contains("\"email\":\"" + email + "\"")),
+            argThat(ttl -> ttl != null && ttl.toMinutes() >= 10 && ttl.toMinutes() <= 15)
+        );
+    }
+
+    @Test
+    void testGetUserProfile_ShouldReturnFromRedisWhenCacheHits() throws Exception {
+        String email = uniqueEmail();
+        UserProfile profile = new UserProfile(4L, "cached-name", email);
+
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email))
+            .thenReturn(objectMapper.writeValueAsString(profile));
+
+        mockMvc.perform(get("/apply/users/profile").param("email", email))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("查询用户信息成功（命中缓存）"))
+            .andExpect(jsonPath("$.data.email").value(email))
+            .andExpect(jsonPath("$.data.username").value("cached-name"));
+
+        // 命中缓存时不应访问数据库。
+        verify(userMapper, never()).selectOne(any(LambdaQueryWrapper.class));
+    }
+
+    @Test
+    void testGetUserProfile_ShouldReturnNotRegisteredAndCacheNullWhenBloomFilterMayExistButDatabaseMisses() throws Exception {
+        String knownEmail = "known@qq.com";
+        String unknownEmail = "unknown@qq.com";
+
+        when(userMapper.selectList(any())).thenReturn(List.of(buildUser(9L, knownEmail, "123456", knownEmail)));
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + unknownEmail)).thenReturn(null, null);
+        when(valueOperations.setIfAbsent(eq("lock:user:profile:" + unknownEmail), eq("1"), any(Duration.class))).thenReturn(Boolean.TRUE);
+        userService.initializeBloomFilter();
+        mockMvc.perform(get("/apply/users/profile").param("email", unknownEmail))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.msg").value("该邮箱未注册"));
+
+        verify(userMapper, times(1)).selectOne(any(LambdaQueryWrapper.class));
+        verify(valueOperations, times(1)).set(
+            eq(USER_PROFILE_CACHE_PREFIX + unknownEmail),
+            eq(NULL_CACHE_VALUE),
+            argThat(ttl -> ttl != null && ttl.toMinutes() >= 2)
+        );
+    }
+
+    @Test
+    void testQueryUserProfile_PostShouldReadFromRedisAndMysql() throws Exception {
+        String email = uniqueEmail();
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null, null);
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class)))
+            .thenReturn(buildUser(6L, email, "123456", "post-query-user"));
+        when(valueOperations.setIfAbsent(eq("lock:user:profile:" + email), eq("1"), any(Duration.class))).thenReturn(Boolean.TRUE);
+
+        mockMvc.perform(post("/apply/users/profile/query")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s"
+                    }
+                    """.formatted(email)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("查询用户信息成功（已写入缓存）"))
+            .andExpect(jsonPath("$.data.email").value(email))
+            .andExpect(jsonPath("$.data.username").value("post-query-user"));
+
+        verify(userMapper, times(1)).selectOne(any(LambdaQueryWrapper.class));
+        verify(valueOperations, times(1)).set(
+            eq(USER_PROFILE_CACHE_PREFIX + email),
+            argThat(json -> json != null && json.contains("\"username\":\"post-query-user\"")),
+            argThat(ttl -> ttl != null && ttl.toMinutes() >= 10 && ttl.toMinutes() <= 15)
+        );
+    }
+
+    @Test
+    void testCreateUserProfile_PostShouldInsertIntoMysqlAndWriteRedis() throws Exception {
+        String email = uniqueEmail();
+
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+        when(userMapper.insert(any(User.class))).thenAnswer(invocation -> {
+            User user = invocation.getArgument(0);
+            user.setId(7L);
+            return 1;
+        });
+
+        mockMvc.perform(post("/apply/users/profile/create")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s",
+                      "password": "123456",
+                      "username": "created-user"
+                    }
+                    """.formatted(email)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("新增用户成功，数据库写入完成，缓存已双删"))
+            .andExpect(jsonPath("$.data.id").value(7))
+            .andExpect(jsonPath("$.data.email").value(email))
+            .andExpect(jsonPath("$.data.username").value("created-user"));
+
+        verify(userMapper, times(1)).insert(any(User.class));
+        verify(stringRedisTemplate, atLeast(1)).delete(USER_PROFILE_CACHE_PREFIX + email);
+    }
+
+    @Test
+    void testUpdateUsername_ShouldEvictRedisCacheAfterDatabaseUpdate() throws Exception {
+        String email = uniqueEmail();
+
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null, null);
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class)))
+            .thenReturn(buildUser(5L, email, "123456", "before-update"));
+        when(userMapper.update(ArgumentMatchers.<User>isNull(), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        when(valueOperations.setIfAbsent(eq("lock:user:profile:" + email), eq("1"), any(Duration.class))).thenReturn(Boolean.TRUE);
+        when(stringRedisTemplate.delete(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(Boolean.TRUE);
+
+        mockMvc.perform(get("/apply/users/profile").param("email", email))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(post("/apply/users/profile/username")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s",
+                      "username": "after-update"
+                    }
+                    """.formatted(email)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("用户名更新成功，缓存已双删"));
+
+        // 更新资料后应删除对应的 Redis 缓存 Key。
+        verify(stringRedisTemplate, atLeast(2)).delete(USER_PROFILE_CACHE_PREFIX + email);
+    }
+
+    @Test
+    void testDeleteUserProfile_PostShouldDeleteMysqlAndEvictRedis() throws Exception {
+        String email = uniqueEmail();
+
+        when(userMapper.delete(any(LambdaQueryWrapper.class))).thenReturn(1);
+        when(stringRedisTemplate.delete(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(Boolean.TRUE);
+
+        mockMvc.perform(post("/apply/users/profile/delete")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "email": "%s"
+                    }
+                    """.formatted(email)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.msg").value("用户删除成功，缓存已双删"));
+
+        verify(userMapper, times(1)).delete(any(LambdaQueryWrapper.class));
+        verify(stringRedisTemplate, atLeast(2)).delete(USER_PROFILE_CACHE_PREFIX + email);
+    }
+
+    private String uniqueEmail() {
+        return "test-" + UUID.randomUUID() + "@qq.com";
+    }
+
+    private User buildUser(Long id, String email, String password, String username) {
+        User user = new User();
+        user.setId(id);
+        user.setEmail(email);
+        user.setPassword(password);
+        user.setUsername(username);
+        return user;
+    }
+
+    private void initializeMybatisPlusMetadata() {
+        if (TableInfoHelper.getTableInfo(User.class) != null) {
+            return;
+        }
+        MybatisConfiguration configuration = new MybatisConfiguration();
+        MapperBuilderAssistant assistant = new MapperBuilderAssistant(configuration, "");
+        TableInfoHelper.initTableInfo(assistant, User.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void mockRedisBloomCommands() {
+        when(stringRedisTemplate.execute(any(RedisCallback.class))).thenAnswer((Answer<Object>) invocation -> {
+            RedisCallback<Object> callback = invocation.getArgument(0);
+            RedisConnection connection = org.mockito.Mockito.mock(RedisConnection.class);
+            when(connection.execute(any(String.class), any(byte[][].class))).thenReturn(new byte[] { 1 });
+            return callback.doInRedis(connection);
+        });
+    }
 }

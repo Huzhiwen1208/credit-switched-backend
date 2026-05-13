@@ -3,6 +3,19 @@ server:
   error:
     include-message: always
 spring:
+  # ==========================================
+  # 1. 新增：数据库连接配置
+  # ==========================================
+  datasource:
+    # 连接你的 Docker MySQL (确保 myapp_db 库已存在)
+    url: jdbc:mysql://localhost:3306/myapp_db?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    username: app_user
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # ==========================================
+  # 2. 邮件配置
+  # ==========================================
   mail:
     host: smtp.qq.com
     username: 2587879285@qq.com
@@ -15,6 +28,31 @@ spring:
           auth: true
           starttls:
             enable: true
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: 2000ms
+
+mybatis-plus:
+  configuration:
+    # 开启控制台打印 SQL，方便调试
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # 自动将数据库下划线字段 (user_name) 映射为 Java 驼峰字段 (userName)
+    map-underscore-to-camel-case: true
+  
+  global-config:
+    db-config:
+      # 全局主键策略：使用雪花算法生成唯一 ID
+      id-type: assign_id
+
 auth:
   handler:
     email: "email"
