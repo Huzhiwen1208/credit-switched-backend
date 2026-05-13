@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -14,6 +15,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -26,7 +28,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.http.MediaType;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -41,8 +45,10 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.credit.biz.mapper.UserMapper;
+import org.credit.biz.service.UserService;
 
 import jakarta.servlet.http.HttpSession;
+import org.mockito.stubbing.Answer;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -53,12 +59,16 @@ class CreditSwitchApplicationTests {
     private static final String REGISTER_EMAIL_SESSION_KEY = "REGISTER_EMAIL";
     private static final String LOGIN_USER_SESSION_KEY = "LOGIN_USER";
     private static final String USER_PROFILE_CACHE_PREFIX = "user:profile:";
+    private static final String NULL_CACHE_VALUE = "__NULL__";
 
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private UserService userService;
 
     @MockBean
     private JavaMailSender javaMailSender;
@@ -75,7 +85,10 @@ class CreditSwitchApplicationTests {
     @BeforeEach
     void setUp() {
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(userMapper.selectList(any())).thenReturn(List.of());
+        mockRedisBloomCommands();
         initializeMybatisPlusMetadata();
+        userService.initializeBloomFilter();
     }
 
     @Test
@@ -272,8 +285,9 @@ class CreditSwitchApplicationTests {
         String email = uniqueEmail();
         User storedUser = buildUser(3L, email, "123456", "cache-user");
 
-        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null);
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null, null);
         when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(storedUser);
+        when(valueOperations.setIfAbsent(eq("lock:user:profile:" + email), eq("1"), any(Duration.class))).thenReturn(Boolean.TRUE);
 
         mockMvc.perform(get("/apply/users/profile").param("email", email))
             .andExpect(status().isOk())
@@ -287,7 +301,7 @@ class CreditSwitchApplicationTests {
         verify(valueOperations, times(1)).set(
             eq(USER_PROFILE_CACHE_PREFIX + email),
             argThat(json -> json != null && json.contains("\"email\":\"" + email + "\"")),
-            eq(Duration.ofMinutes(10))
+            argThat(ttl -> ttl != null && ttl.toMinutes() >= 10 && ttl.toMinutes() <= 15)
         );
     }
 
@@ -311,11 +325,35 @@ class CreditSwitchApplicationTests {
     }
 
     @Test
+    void testGetUserProfile_ShouldReturnNotRegisteredAndCacheNullWhenBloomFilterMayExistButDatabaseMisses() throws Exception {
+        String knownEmail = "known@qq.com";
+        String unknownEmail = "unknown@qq.com";
+
+        when(userMapper.selectList(any())).thenReturn(List.of(buildUser(9L, knownEmail, "123456", knownEmail)));
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + unknownEmail)).thenReturn(null, null);
+        when(valueOperations.setIfAbsent(eq("lock:user:profile:" + unknownEmail), eq("1"), any(Duration.class))).thenReturn(Boolean.TRUE);
+        userService.initializeBloomFilter();
+        mockMvc.perform(get("/apply/users/profile").param("email", unknownEmail))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.msg").value("该邮箱未注册"));
+
+        verify(userMapper, times(1)).selectOne(any(LambdaQueryWrapper.class));
+        verify(valueOperations, times(1)).set(
+            eq(USER_PROFILE_CACHE_PREFIX + unknownEmail),
+            eq(NULL_CACHE_VALUE),
+            argThat(ttl -> ttl != null && ttl.toMinutes() >= 2)
+        );
+    }
+
+    @Test
     void testQueryUserProfile_PostShouldReadFromRedisAndMysql() throws Exception {
         String email = uniqueEmail();
-        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null);
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null, null);
         when(userMapper.selectOne(any(LambdaQueryWrapper.class)))
             .thenReturn(buildUser(6L, email, "123456", "post-query-user"));
+        when(valueOperations.setIfAbsent(eq("lock:user:profile:" + email), eq("1"), any(Duration.class))).thenReturn(Boolean.TRUE);
 
         mockMvc.perform(post("/apply/users/profile/query")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -334,7 +372,7 @@ class CreditSwitchApplicationTests {
         verify(valueOperations, times(1)).set(
             eq(USER_PROFILE_CACHE_PREFIX + email),
             argThat(json -> json != null && json.contains("\"username\":\"post-query-user\"")),
-            eq(Duration.ofMinutes(10))
+            argThat(ttl -> ttl != null && ttl.toMinutes() >= 10 && ttl.toMinutes() <= 15)
         );
     }
 
@@ -360,27 +398,24 @@ class CreditSwitchApplicationTests {
                     """.formatted(email)))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.msg").value("新增用户成功，已写入数据库和缓存"))
+            .andExpect(jsonPath("$.msg").value("新增用户成功，数据库写入完成，缓存已双删"))
             .andExpect(jsonPath("$.data.id").value(7))
             .andExpect(jsonPath("$.data.email").value(email))
             .andExpect(jsonPath("$.data.username").value("created-user"));
 
         verify(userMapper, times(1)).insert(any(User.class));
-        verify(valueOperations, times(1)).set(
-            eq(USER_PROFILE_CACHE_PREFIX + email),
-            argThat(json -> json != null && json.contains("\"username\":\"created-user\"")),
-            eq(Duration.ofMinutes(10))
-        );
+        verify(stringRedisTemplate, atLeast(1)).delete(USER_PROFILE_CACHE_PREFIX + email);
     }
 
     @Test
     void testUpdateUsername_ShouldEvictRedisCacheAfterDatabaseUpdate() throws Exception {
         String email = uniqueEmail();
 
-        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null);
+        when(valueOperations.get(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(null, null);
         when(userMapper.selectOne(any(LambdaQueryWrapper.class)))
             .thenReturn(buildUser(5L, email, "123456", "before-update"));
         when(userMapper.update(ArgumentMatchers.<User>isNull(), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        when(valueOperations.setIfAbsent(eq("lock:user:profile:" + email), eq("1"), any(Duration.class))).thenReturn(Boolean.TRUE);
         when(stringRedisTemplate.delete(USER_PROFILE_CACHE_PREFIX + email)).thenReturn(Boolean.TRUE);
 
         mockMvc.perform(get("/apply/users/profile").param("email", email))
@@ -397,10 +432,10 @@ class CreditSwitchApplicationTests {
                     """.formatted(email)))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.msg").value("用户名更新成功，缓存已删除"));
+            .andExpect(jsonPath("$.msg").value("用户名更新成功，缓存已双删"));
 
         // 更新资料后应删除对应的 Redis 缓存 Key。
-        verify(stringRedisTemplate, times(1)).delete(USER_PROFILE_CACHE_PREFIX + email);
+        verify(stringRedisTemplate, atLeast(2)).delete(USER_PROFILE_CACHE_PREFIX + email);
     }
 
     @Test
@@ -419,10 +454,10 @@ class CreditSwitchApplicationTests {
                     """.formatted(email)))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.msg").value("用户删除成功，缓存已删除"));
+            .andExpect(jsonPath("$.msg").value("用户删除成功，缓存已双删"));
 
         verify(userMapper, times(1)).delete(any(LambdaQueryWrapper.class));
-        verify(stringRedisTemplate, times(1)).delete(USER_PROFILE_CACHE_PREFIX + email);
+        verify(stringRedisTemplate, atLeast(2)).delete(USER_PROFILE_CACHE_PREFIX + email);
     }
 
     private String uniqueEmail() {
@@ -445,5 +480,15 @@ class CreditSwitchApplicationTests {
         MybatisConfiguration configuration = new MybatisConfiguration();
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(configuration, "");
         TableInfoHelper.initTableInfo(assistant, User.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void mockRedisBloomCommands() {
+        when(stringRedisTemplate.execute(any(RedisCallback.class))).thenAnswer((Answer<Object>) invocation -> {
+            RedisCallback<Object> callback = invocation.getArgument(0);
+            RedisConnection connection = org.mockito.Mockito.mock(RedisConnection.class);
+            when(connection.execute(any(String.class), any(byte[][].class))).thenReturn(new byte[] { 1 });
+            return callback.doInRedis(connection);
+        });
     }
 }
